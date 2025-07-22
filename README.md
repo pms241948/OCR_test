@@ -16,7 +16,8 @@
   PaddleOCR의 결과 반환 구조가 변경되었으나, 기존 코드가 예전 방식(`for line in result[0]: ...`)으로 파싱함
 
 - **해결:**  
-  최신 구조에 맞게 `result[0]['rec_texts']`에서 텍스트를 추출하도록 코드 수정
+  최신 구조에 맞게 `result[0]['rec_texts']`에서 텍스트를 추출하거나,  
+  **좌표(y, x) 기반 병합, 신뢰도 필터링, 한글 후처리, 레이아웃 보존 등 다양한 후처리(post-processing) 기법을 적용**하여 가독성과 문서 구조를 크게 개선함
 
 ---
 
@@ -73,27 +74,51 @@ pip install numpy
 ## 실행 방법
 
 1. PDF 파일을 `ex_pdf/` 폴더에 넣습니다.
-2. Jupyter Notebook(`ocr_test.ipynb`)을 실행합니다.
-3. 모든 셀을 순서대로 실행하면,  
-   - `outputs/paddle_txt/`  
+2. `paddle_text.py`(최신 개선 버전) 또는 Jupyter Notebook(`ocr_test.ipynb`)을 실행합니다.
+3. 모든 셀 또는 스크립트를 실행하면,  
+   - `outputs/new_paddle_txt/`  
    - `outputs/tesseract_txt/`  
    폴더에 결과가 저장됩니다.
 
 ---
 
-## 주요 코드(핵심 부분)
+## 주요 코드(핵심 부분, 최신 개선 버전)
 
 ```python
+def merge_ocr_lines_by_yx(ocr_result, y_thresh=20, x_thresh=10):
+    # ... (좌표 기반 병합 함수, paddle_text.py 참고)
+    # y좌표가 비슷한 라인끼리 한 줄로 합침
+    # ...
+    return merged_lines
+
+def post_process_korean_text(text_lines):
+    # ... (한글 조사/어미/공백/문장부호 후처리)
+    return processed_lines
+
+def merge_short_lines(lines, min_length=10):
+    # ... (짧은 줄 병합, 제목/목록/표 구분)
+    return merged
+
 def ocr_paddle(pdf_path: str) -> str:
     pages = convert_from_path(pdf_path, dpi=300)
-    lines = []
-    for pil_img in pages:
+    all_lines = []
+    for page_num, pil_img in enumerate(pages):
         img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         result = paddle_ocr.ocr(img_bgr)
-        # 최신 PaddleOCR 구조에 맞게 텍스트 추출
-        if result and isinstance(result, list) and 'rec_texts' in result[0]:
-            lines.extend(result[0]['rec_texts'])
-    return "\n".join(lines)
+        if result and isinstance(result, list) and len(result) > 0:
+            if isinstance(result[0], dict) and 'rec_texts' in result[0]:
+                all_lines.extend([line.strip() for line in result[0]['rec_texts'] if line.strip()])
+            else:
+                merged_lines = merge_ocr_lines_by_yx(result, y_thresh=20, x_thresh=10)
+                all_lines.extend(merged_lines)
+        if page_num < len(pages) - 1:
+            all_lines.append("")
+    processed_lines = post_process_korean_text(all_lines)
+    non_empty_lines = [line for line in processed_lines if line.strip()]
+    merged_lines = merge_short_lines(non_empty_lines, min_length=10)
+    final_text = "\n".join(merged_lines)
+    final_text = re.sub(r'\n{4,}', '\n\n\n', final_text)
+    return final_text.strip()
 ```
 
 ---
@@ -101,7 +126,10 @@ def ocr_paddle(pdf_path: str) -> str:
 ## 자주 발생하는 이슈 및 해결 팁
 
 - **PaddleOCR 결과가 한 글자씩만 나오는 경우:**  
-  → 위 코드처럼 `result[0]['rec_texts']`에서 추출해야 함
+  → PaddleOCR 결과 구조에 따라 `result[0]['rec_texts']` 또는 좌표 기반 병합/후처리 함수 사용
+
+- **줄바꿈이 너무 많거나, 문장/문단이 어색하게 쪼개지는 경우:**  
+  → 좌표(y, x) 기반 병합, 한글 후처리, 짧은 줄 병합 등 최신 paddle_text.py 방식 적용
 
 - **Tesseract가 동작하지 않는 경우:**  
   → 환경변수 또는 코드에서 Tesseract 경로를 명확히 지정
@@ -128,9 +156,10 @@ def ocr_paddle(pdf_path: str) -> str:
 OCR_test/
   ex_pdf/                # 입력 PDF 파일
   outputs/
-    paddle_txt/          # PaddleOCR 결과
+    new_paddle_txt/      # PaddleOCR 최신 개선 결과
     tesseract_txt/       # Tesseract 결과
-  ocr_test.ipynb         # 메인 노트북
+  paddle_text.py         # PaddleOCR 개선 버전 메인 스크립트
+  ocr_test.ipynb         # (선택) Jupyter 노트북
   models/                # (선택) 커스텀 모델
   pdf_original/          # (선택) 원본 PDF
 ```
